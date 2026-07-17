@@ -25,3 +25,11 @@ main = "_worker.js"
 # 最大重定向跟随次数 (默认 5)
 # [vars]
 # MAX_REDIRECTS = "5"
+
+# ============================================================
+# 可观测性配置
+# 启用 Workers 追踪 (Logpush), 用于在 Cloudflare Dashboard
+# 中查看 Worker 执行的详细追踪信息
+# ============================================================
+[observability.traces]
+enabled = true
