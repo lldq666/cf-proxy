@@ -431,7 +431,7 @@ function buildCommonHeaders(request, targetDomain) {
   headers.set('Referer', `https://${targetDomain}/`);
 
   // 清理 Cloudflare 添加的头部
-  CF_HEADERS_TO_DELETE.forEach(h => headers.delete(h));
+  CF_HEADERS_TO_REMOVE.forEach(h => headers.delete(h));
 
   return headers;
 }
@@ -442,7 +442,7 @@ function buildGitHeaders(request, targetDomain) {
   headers.set('Referer', `https://${targetDomain}/`);
 
   // 清理所有 Cloudflare 和代理相关的头部
-  CF_HEADERS_TO_DELETE.forEach(h => headers.delete(h));
+  CF_HEADERS_TO_REMOVE.forEach(h => headers.delete(h));
 
   return headers;
 }
