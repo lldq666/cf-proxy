@@ -109,28 +109,36 @@ async function handleRequest(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/+/, '');
 
-  // 根路径 → 返回首页 HTML
-  if (path === '' || path === '/') {
-    return new Response(HOMEPAGE_HTML, {
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
-      },
+  try {
+    // 根路径 → 返回首页 HTML
+    if (path === '' || path === '/') {
+      return new Response(HOMEPAGE_HTML, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
+
+    // Docker Registry V2 API 请求: /v2/...
+    if (path.startsWith('v2/')) {
+      return await handleDockerV2(request, path, env);
+    }
+
+    // 带完整 URL 前缀的请求: /https://github.com/...
+    if (path.startsWith('https://') || path.startsWith('http://')) {
+      return await handleProxyWithUrl(request, path, env);
+    }
+
+    // 裸路径 → 视为 Docker Hub 镜像
+    return await handleDockerHub(request, path, env);
+  } catch (e) {
+    // 兜底: 捕获所有未处理异常, 返回友好错误而非 500
+    return new Response(`Proxy error: ${e.message || 'Internal error'}`, {
+      status: 502,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
     });
   }
-
-  // Docker Registry V2 API 请求: /v2/...
-  if (path.startsWith('v2/')) {
-    return handleDockerV2(request, path, env);
-  }
-
-  // 带完整 URL 前缀的请求: /https://github.com/...
-  if (path.startsWith('https://') || path.startsWith('http://')) {
-    return handleProxyWithUrl(request, path, env);
-  }
-
-  // 裸路径 → 视为 Docker Hub 镜像
-  return handleDockerHub(request, path, env);
 }
 
 // ============================================================
@@ -145,13 +153,18 @@ async function handleDockerV2(request, path, env) {
 
   const headers = buildCommonHeaders(request, DOCKER_REGISTRY_HOST);
 
-  // Docker V2 API 请求不需要跟随重定向（需要手动处理）
-  let response = await fetch(targetUrl, {
+  // 构建请求选项: GET/HEAD 请求不传 body
+  const fetchOptions = {
     method: request.method,
     headers: headers,
-    body: request.body,
     redirect: 'manual',
-  });
+  };
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    fetchOptions.body = request.body;
+  }
+
+  // Docker V2 API 请求不需要跟随重定向（需要手动处理）
+  let response = await fetch(targetUrl, fetchOptions);
 
   // 处理 401 认证 → 获取 Token → 重试
   if (response.status === 401) {
@@ -159,12 +172,13 @@ async function handleDockerV2(request, path, env) {
     if (token) {
       const authHeaders = new Headers(headers);
       authHeaders.set('Authorization', `Bearer ${token}`);
-      response = await fetch(targetUrl, {
+      const authFetchOptions = {
         method: request.method,
         headers: authHeaders,
-        body: request.body,
         redirect: 'manual',
-      });
+      };
+      // 认证重试时不再传 body (流已被消耗)
+      response = await fetch(targetUrl, authFetchOptions);
     }
   }
 
@@ -198,12 +212,17 @@ async function handleDockerHub(request, path, env) {
 
   const headers = buildCommonHeaders(request, DOCKER_REGISTRY_HOST);
 
-  let response = await fetch(targetUrl, {
+  // 构建请求选项: GET/HEAD 请求不传 body
+  const fetchOptions = {
     method: request.method,
     headers: headers,
-    body: request.body,
     redirect: 'manual',
-  });
+  };
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    fetchOptions.body = request.body;
+  }
+
+  let response = await fetch(targetUrl, fetchOptions);
 
   // 处理 401 认证
   if (response.status === 401) {
@@ -211,12 +230,13 @@ async function handleDockerHub(request, path, env) {
     if (token) {
       const authHeaders = new Headers(headers);
       authHeaders.set('Authorization', `Bearer ${token}`);
-      response = await fetch(targetUrl, {
+      const authFetchOptions = {
         method: request.method,
         headers: authHeaders,
-        body: request.body,
         redirect: 'manual',
-      });
+      };
+      // 认证重试时不再传 body (流已被消耗)
+      response = await fetch(targetUrl, authFetchOptions);
     }
   }
 
@@ -252,24 +272,31 @@ async function handleProxyWithUrl(request, path, env) {
 
   if (isGit) {
     // Git smart-http 请求: 用 follow 模式, 清理 CF 头部
-    const headers = buildGitHeaders(request, targetDomain);
-    const response = await fetch(targetUrl.href, {
+    const gitHeaders = buildGitHeaders(request, targetDomain);
+    const gitFetchOptions = {
       method: request.method,
-      headers: headers,
-      body: request.body,
+      headers: gitHeaders,
       redirect: 'follow',
-    });
+    };
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      gitFetchOptions.body = request.body;
+    }
+    const response = await fetch(targetUrl.href, gitFetchOptions);
     return buildProxyResponse(response, false);
   }
 
   // 普通请求: 用 manual 模式拦截重定向
   const headers = buildCommonHeaders(request, targetDomain);
-  let response = await fetch(targetUrl.href, {
+  const fetchOptions = {
     method: request.method,
     headers: headers,
-    body: request.body,
     redirect: 'manual',
-  });
+  };
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    fetchOptions.body = request.body;
+  }
+
+  let response = await fetch(targetUrl.href, fetchOptions);
 
   // 处理重定向
   response = await handleRedirects(request, response, headers, false, env);
@@ -285,18 +312,29 @@ async function handleRedirects(request, response, baseHeaders, isDocker, env) {
   let redirectCount = 0;
   const maxRedirects = resolveMaxRedirects(env);
 
+  // 重定向请求不应携带原始 body (GET/HEAD 请求无 body)
+  const redirectMethod = (request.method === 'POST' || request.method === 'PUT') ? request.method : 'GET';
+
   while ((response.status === 302 || response.status === 307 || response.status === 301 || response.status === 308) && redirectCount < maxRedirects) {
     const location = response.headers.get('Location');
     if (!location) break;
 
-    const redirectUrl = location.startsWith('http') ? location : `https://${new URL(request.url).hostname}${location}`;
-    const redirectHost = new URL(redirectUrl).hostname;
+    // 解析重定向 URL (支持相对路径和绝对路径)
+    let redirectUrl;
+    try {
+      redirectUrl = new URL(location, `https://${new URL(request.url).hostname}`);
+    } catch {
+      break;
+    }
+    const redirectHost = redirectUrl.hostname;
 
     const redirectHeaders = new Headers(baseHeaders);
     redirectHeaders.set('Host', redirectHost);
+    // 重定向请求不携带原始 Referer
+    redirectHeaders.set('Referer', `https://${redirectHost}/`);
 
     // AWS S3 重定向需要补充认证头
-    if (isAmazonS3(redirectUrl)) {
+    if (isAmazonS3(redirectUrl.href)) {
       redirectHeaders.set('x-amz-content-sha256', EMPTY_BODY_SHA256);
       redirectHeaders.set('x-amz-date', formatAWSDate());
     }
@@ -306,12 +344,15 @@ async function handleRedirects(request, response, baseHeaders, isDocker, env) {
       break;
     }
 
-    response = await fetch(redirectUrl, {
-      method: request.method,
-      headers: redirectHeaders,
-      body: request.body,
-      redirect: 'manual',
-    });
+    try {
+      response = await fetch(redirectUrl.href, {
+        method: redirectMethod,
+        headers: redirectHeaders,
+        redirect: 'manual',
+      });
+    } catch (e) {
+      break;
+    }
 
     redirectCount++;
   }
