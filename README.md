@@ -130,19 +130,40 @@ https://your-domain/https://gitlab.com/user/repo/-/raw/main/file.txt
 | GitLab | `gitlab.com`, `gitlab.freedesktop.org`, `gitlab.gnome.org`, `gitlab.kitware.com`, `gitlab.archlinux.org`, `gitlab.postmarketos.org` |
 | Docker | `registry-1.docker.io`, `auth.docker.io`, `ghcr.io`, `gcr.io`, `registry.k8s.io`, `quay.io` |
 
-如需添加更多域名，编辑 `_worker.js` 中的 `ALLOWED_HOSTS` 数组。
+如需添加更多域名，可通过环境变量配置（见下方）或编辑 `_worker.js` 中的 `DEFAULT_ALLOWED_HOSTS` 数组。
 
 ## ⚙️ 自定义配置
 
-编辑 `_worker.js` 顶部的常量：
+支持通过 Cloudflare 环境变量覆盖默认配置，无需修改代码：
 
-```javascript
-// 白名单域名
-const ALLOWED_HOSTS = [ /* 添加或删除域名 */ ];
+| 环境变量 | 说明 | 默认值 | 示例 |
+|----------|------|--------|------|
+| `ALLOWED_HOSTS` | 额外添加的白名单域名（逗号分隔），会与默认白名单合并 | 默认白名单 | `myregistry.com,ghcr.example.com` |
+| `MAX_REDIRECTS` | 最大重定向跟随次数 | `5` | `3` |
 
-// 最大重定向次数
-const MAX_REDIRECTS = 5;
+### 设置环境变量
+
+**Cloudflare Workers:**
+Dashboard → Workers → 你的 Worker → 设置 → 变量和机密 → 添加变量
+
+**Cloudflare Pages:**
+Dashboard → Pages → 你的项目 → 设置 → 环境变量 → 添加变量
+
+**wrangler.toml:**
+
+```toml
+[vars]
+ALLOWED_HOSTS = "myregistry.com,custom.domain.com"
+MAX_REDIRECTS = "3"
 ```
+
+### 配置示例
+
+- 添加私有 Docker Registry：设置 `ALLOWED_HOSTS = "registry.mycompany.com"`
+- 添加多个 GitLab 实例：设置 `ALLOWED_HOSTS = "gitlab.mycompany.com,gitlab2.mycompany.com"`
+- 减少重定向深度：设置 `MAX_REDIRECTS = "3"`
+
+> 未设置环境变量时，自动使用内置默认配置，开箱即用。
 
 ## 📁 项目结构
 

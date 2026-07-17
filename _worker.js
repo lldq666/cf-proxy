@@ -12,9 +12,14 @@
  */
 
 // ============================================================
-// 白名单配置 — 只允许代理以下域名的请求
+// 默认配置 — 可通过环境变量覆盖
+// 环境变量:
+//   ALLOWED_HOSTS  — 逗号分隔的额外白名单域名，会与默认白名单合并
+//   MAX_REDIRECTS  — 最大重定向次数 (默认 5)
 // ============================================================
-const ALLOWED_HOSTS = [
+
+// 默认白名单域名
+const DEFAULT_ALLOWED_HOSTS = [
   // GitHub
   'github.com',
   'raw.githubusercontent.com',
@@ -47,7 +52,26 @@ const ALLOWED_HOSTS = [
 // Docker Hub 的认证服务
 const DOCKER_AUTH_HOST = 'auth.docker.io';
 const DOCKER_REGISTRY_HOST = 'registry-1.docker.io';
-const MAX_REDIRECTS = 5;
+const DEFAULT_MAX_REDIRECTS = 5;
+
+// 从环境变量解析配置，未设置时使用默认值
+function resolveAllowedHosts(env) {
+  const extraHosts = env?.ALLOWED_HOSTS;
+  if (!extraHosts) return DEFAULT_ALLOWED_HOSTS;
+  const parsed = extraHosts
+    .split(',')
+    .map(h => h.trim().toLowerCase())
+    .filter(h => h.length > 0);
+  // 合并默认白名单与额外域名，去重
+  return [...new Set([...DEFAULT_ALLOWED_HOSTS, ...parsed])];
+}
+
+function resolveMaxRedirects(env) {
+  const val = env?.MAX_REDIRECTS;
+  if (val === undefined || val === null || val === '') return DEFAULT_MAX_REDIRECTS;
+  const num = parseInt(val, 10);
+  return Number.isNaN(num) ? DEFAULT_MAX_REDIRECTS : num;
+}
 
 // Git smart-http 协议相关域名
 const GIT_DOMAINS = [
@@ -74,14 +98,14 @@ const EMPTY_BODY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4959
 // ============================================================
 export default {
   async fetch(request, env, ctx) {
-    return handleRequest(request);
+    return handleRequest(request, env);
   },
 };
 
 // ============================================================
 // 核心路由分发
 // ============================================================
-async function handleRequest(request) {
+async function handleRequest(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/+/, '');
 
@@ -97,23 +121,23 @@ async function handleRequest(request) {
 
   // Docker Registry V2 API 请求: /v2/...
   if (path.startsWith('v2/')) {
-    return handleDockerV2(request, path);
+    return handleDockerV2(request, path, env);
   }
 
   // 带完整 URL 前缀的请求: /https://github.com/...
   if (path.startsWith('https://') || path.startsWith('http://')) {
-    return handleProxyWithUrl(request, path);
+    return handleProxyWithUrl(request, path, env);
   }
 
   // 裸路径 → 视为 Docker Hub 镜像
-  return handleDockerHub(request, path);
+  return handleDockerHub(request, path, env);
 }
 
 // ============================================================
 // Docker Registry V2 API 处理
 // 路径格式: /v2/library/nginx/manifests/latest
 // ============================================================
-async function handleDockerV2(request, path) {
+async function handleDockerV2(request, path, env) {
   const url = new URL(request.url);
   // /v2/ 后面的路径
   const dockerPath = path.substring(3); // 去掉 "v2/"
@@ -145,7 +169,7 @@ async function handleDockerV2(request, path) {
   }
 
   // 处理 302/307 重定向 (Docker blob 分发到 S3)
-  response = await handleRedirects(request, response, headers, true);
+  response = await handleRedirects(request, response, headers, true, env);
 
   return buildProxyResponse(response, true);
 }
@@ -154,7 +178,7 @@ async function handleDockerV2(request, path) {
 // Docker Hub 镜像处理
 // 输入格式: nginx, library/nginx, user/repo, docker.io/nginx
 // ============================================================
-async function handleDockerHub(request, path) {
+async function handleDockerHub(request, path, env) {
   let dockerPath = path;
 
   // 去掉 docker.io/ 前缀
@@ -197,7 +221,7 @@ async function handleDockerHub(request, path) {
   }
 
   // 处理重定向
-  response = await handleRedirects(request, response, headers, true);
+  response = await handleRedirects(request, response, headers, true, env);
 
   return buildProxyResponse(response, true);
 }
@@ -206,7 +230,7 @@ async function handleDockerHub(request, path) {
 // 带完整 URL 的代理处理
 // 路径格式: /https://github.com/user/repo/...
 // ============================================================
-async function handleProxyWithUrl(request, path) {
+async function handleProxyWithUrl(request, path, env) {
   let targetUrl;
   try {
     targetUrl = new URL(path);
@@ -217,7 +241,7 @@ async function handleProxyWithUrl(request, path) {
   const targetDomain = targetUrl.hostname;
 
   // 白名单校验
-  if (!isHostAllowed(targetDomain)) {
+  if (!isHostAllowed(targetDomain, env)) {
     return new Response(`Error: Domain "${targetDomain}" is not in the allowed list.`, {
       status: 403,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' },
@@ -248,7 +272,7 @@ async function handleProxyWithUrl(request, path) {
   });
 
   // 处理重定向
-  response = await handleRedirects(request, response, headers, false);
+  response = await handleRedirects(request, response, headers, false, env);
 
   return buildProxyResponse(response, false);
 }
@@ -257,10 +281,11 @@ async function handleProxyWithUrl(request, path) {
 // 重定向处理 (302/307)
 // Docker blob 分发到 S3, GitHub release 到 objects.githubusercontent.com
 // ============================================================
-async function handleRedirects(request, response, baseHeaders, isDocker) {
+async function handleRedirects(request, response, baseHeaders, isDocker, env) {
   let redirectCount = 0;
+  const maxRedirects = resolveMaxRedirects(env);
 
-  while ((response.status === 302 || response.status === 307 || response.status === 301 || response.status === 308) && redirectCount < MAX_REDIRECTS) {
+  while ((response.status === 302 || response.status === 307 || response.status === 301 || response.status === 308) && redirectCount < maxRedirects) {
     const location = response.headers.get('Location');
     if (!location) break;
 
@@ -277,7 +302,7 @@ async function handleRedirects(request, response, baseHeaders, isDocker) {
     }
 
     // 白名单校验
-    if (!isHostAllowed(redirectHost)) {
+    if (!isHostAllowed(redirectHost, env)) {
       break;
     }
 
@@ -323,8 +348,9 @@ async function getDockerToken(response) {
 // 工具函数
 // ============================================================
 
-function isHostAllowed(hostname) {
-  return ALLOWED_HOSTS.some(host => hostname === host || hostname.endsWith('.' + host));
+function isHostAllowed(hostname, env) {
+  const allowedHosts = resolveAllowedHosts(env);
+  return allowedHosts.some(host => hostname === host || hostname.endsWith('.' + host));
 }
 
 function isGitRequest(request, targetDomain, path) {
