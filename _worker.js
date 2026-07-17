@@ -530,6 +530,7 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       <input type="text" id="input-github" class="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent mb-3" placeholder="https://github.com/user/repo/releases/download/v1.0/file.zip" oninput="convertGithub()">
       <div class="flex gap-2 mb-3">
         <button onclick="convertGithub()" class="flex-1 px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-medium transition-colors">转换链接</button>
+        <button onclick="visitUrl('output-github')" class="copy-btn px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">访问</button>
         <button onclick="copyResult('output-github')" class="copy-btn px-4 py-2.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">复制链接</button>
       </div>
       <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
@@ -702,6 +703,27 @@ const HOMEPAGE_HTML = `<!DOCTYPE html>
       // 生成 daemon.json 配置
       var daemonConfig = JSON.stringify({ 'registry-mirrors': [currentOrigin] }, null, 2);
       outputDaemon.textContent = daemonConfig;
+    }
+
+    // ============================================================
+    // 访问加速链接 (新窗口打开)
+    // ============================================================
+    function visitUrl(elementId) {
+      var element = document.getElementById(elementId);
+      var text = element.textContent;
+
+      if (!text || text === '等待输入...' || text.startsWith('❌')) {
+        showToast('没有可访问的链接');
+        return;
+      }
+
+      // 确认是有效 URL 才打开
+      if (!/^https?:\\/\\//.test(text)) {
+        showToast('链接格式不正确');
+        return;
+      }
+
+      window.open(text, '_blank');
     }
 
     // ============================================================
