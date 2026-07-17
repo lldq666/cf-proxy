@@ -1,0 +1,13 @@
+name = "cf-proxy"
+compatibility_date = "2024-09-01"
+main = "_worker.js"
+
+# 部署到 Workers:
+#   npx wrangler deploy
+#
+# 部署到 Pages:
+#   将本仓库连接到 Cloudflare Pages，构建命令留空，输出目录为根目录
+#
+# 自定义域名请在 Cloudflare Dashboard 中配置:
+#   Workers → 你的 Worker → 设置 → 触发器 → 自定义域
+#   Pages   → 你的项目  → 自定义域
